@@ -1,0 +1,19 @@
+{
+    "name": "chat-on-connect",
+    "version": "1.0.0",
+    "description": "chat-on-connect",
+    "main": "app.js",
+    "repository": "",
+    "author": "SAM CLI",
+    "license": "MIT",
+    "dependencies": {
+      "jwt-decode": "^3.1.2"
+    },
+    "scripts": {
+      "test": "echo \"Error: no test specified\" && exit 1"
+    },
+    "devDependencies": {
+      "aws-sdk": "^2.815.0",
+      "mocha": "^8.2.1"
+    }
+  }

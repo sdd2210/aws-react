@@ -1,0 +1,462 @@
+# This is the SAM template that represents the architecture of your serverless application
+# https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/serverless-sam-template-basics.html
+
+# The AWSTemplateFormatVersion identifies the capabilities of the template
+# https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/format-version-structure.html
+AWSTemplateFormatVersion: 2010-09-09
+Description: >-
+  aws-cognito-test
+
+# Transform section specifies one or more macros that AWS CloudFormation uses to process your template
+# https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/transform-section-structure.html
+Transform:
+- AWS::Serverless-2016-10-31
+
+# Resources declares the AWS resources that you want to include in the stack
+
+Globals:
+  Function:
+    Timeout: 3
+  Api:
+    Cors:
+      AllowMethods: "'DELETE,GET,HEAD,OPTIONS,PATCH,POST,PUT'"
+      AllowHeaders: "'Content-Type,X-Amz-Date,X-Amz-Security-Token,Authorization,X-Api-Key,X-Requested-With,Accept,Access-Control-Allow-Methods,Access-Control-Allow-Origin,Access-Control-Allow-Headers'"
+      AllowOrigin: "'*'"
+Resources:
+  APIWebSocket:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: aws-cognito-test
+      ProtocolType: WEBSOCKET
+      RouteSelectionExpression: "$request.body.action"
+  ConnectRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref APIWebSocket
+      RouteKey: $connect
+      AuthorizationType: NONE
+      OperationName: ConnectRoute
+      Target: !Join
+        - '/'
+        - - 'integrations'
+          - !Ref ConnectInteg
+  ConnectInteg:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref APIWebSocket
+      Description: Connect Integration
+      IntegrationType: AWS_PROXY
+      IntegrationUri: 
+        Fn::Sub:
+            arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${OnConnectFunction.Arn}/invocations            
+  DisconnectRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref APIWebSocket
+      RouteKey: $disconnect
+      AuthorizationType: NONE
+      OperationName: DisconnectRoute
+      Target: !Join
+        - '/'
+        - - 'integrations'
+          - !Ref DisconnectInteg
+  DisconnectInteg:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref APIWebSocket
+      Description: Disconnect Integration
+      IntegrationType: AWS_PROXY
+      IntegrationUri: 
+        Fn::Sub:
+            arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${OnDisconnectFunction.Arn}/invocations
+  SendRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref APIWebSocket
+      RouteKey: message
+      AuthorizationType: NONE
+      OperationName: SendRoute
+      Target: !Join
+        - '/'
+        - - 'integrations'
+          - !Ref SendInteg
+  SendInteg:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref APIWebSocket
+      Description: Send Integration
+      IntegrationType: AWS_PROXY
+      IntegrationUri: 
+        Fn::Sub:
+            arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${SendMessageFunction.Arn}/invocations        
+  OnConnectFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: src/OnConnect/onconnect.handler
+      Runtime: nodejs12.x   
+      Policies:
+        - AmazonAPIGatewayInvokeFullAccess
+        - AmazonAPIGatewayAdministrator      
+        - AmazonDynamoDBFullAccess        
+  OnConnectPermission:
+    Type: AWS::Lambda::Permission
+    DependsOn:
+      - APIWebSocket
+      - OnConnectFunction
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref OnConnectFunction
+      Principal: apigateway.amazonaws.com      
+  OnDisconnectFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: src/OnDisconnect/ondisconnect.handler
+      Runtime: nodejs12.x   
+      Policies:
+        - AmazonAPIGatewayInvokeFullAccess
+        - AmazonAPIGatewayAdministrator 
+        - AmazonDynamoDBFullAccess                    
+  OnDisconnectPermission:
+    Type: AWS::Lambda::Permission
+    DependsOn:
+      - APIWebSocket
+      - OnDisconnectFunction
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref OnDisconnectFunction
+      Principal: apigateway.amazonaws.com      
+  SendMessageFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: src/SendMessage/sendmess.handler
+      Runtime: nodejs12.x       
+      Policies:
+        - AmazonAPIGatewayInvokeFullAccess
+        - AmazonAPIGatewayAdministrator  
+        - AmazonDynamoDBFullAccess                            
+  SendMessagePermission:
+    Type: AWS::Lambda::Permission
+    DependsOn:
+      - APIWebSocket
+      - SendMessageFunction      
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref SendMessageFunction
+      Principal: apigateway.amazonaws.com      
+  Deployment:
+    Type: AWS::ApiGatewayV2::Deployment
+    DependsOn:
+    - ConnectRoute
+    - SendRoute
+    - DisconnectRoute
+    Properties:
+      ApiId: !Ref APIWebSocket
+  Stage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      StageName: Prod
+      DeploymentId: !Ref Deployment
+      ApiId: !Ref APIWebSocket      
+  UserDBTable:
+    Type: 'AWS::DynamoDB::Table'
+    Properties:
+      TableName: user_register
+      # A list of attributes that describe the key schema for the DynamoDB table and indexes.
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+      ProvisionedThroughput:
+        ReadCapacityUnits: 5
+        WriteCapacityUnits: 5
+  ApiGatewayApi:
+    Type: AWS::Serverless::Api    
+    Properties:
+        Name: aws-cognito-test
+        StageName: Prod
+        GatewayResponses:
+            UNAUTHORIZED:
+              StatusCode: 401
+              ResponseParameters:
+                Headers:
+                  Access-Control-Allow-Origin: "'*'"
+            ACCESS_DENIED:
+              StatusCode: 403
+              ResponseParameters:
+                Headers:
+                  Access-Control-Allow-Origin: "'*'"
+            DEFAULT_5XX:
+              StatusCode: 500
+              ResponseParameters:
+                Headers:
+                  Access-Control-Allow-Origin: "'*'"
+            RESOURCE_NOT_FOUND:
+              StatusCode: 404
+              ResponseParameters:
+                Headers:
+                  Access-Control-Allow-Origin: "'*'"         
+            DEFAULT_4XX:
+              StatusCode: 400
+              ResponseParameters:
+                Headers:
+                  Access-Control-Allow-Origin: "'*'"                   
+        Auth:
+            AddDefaultAuthorizerToCorsPreflight: false
+            DefaultAuthorizer: CognitoAuthorizer
+            Authorizers:
+              CognitoAuthorizer:
+                UserPoolArn: arn:aws:cognito-idp:us-west-2:812805548152:userpool/us-west-2_YVfJZ06AC
+  CreateUsersFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: src/CreateUser/createuser.handler
+      Runtime: nodejs12.x
+      MemorySize: 128
+      Timeout: 100
+      Description: A simple example includes a HTTP get method to post user via cognito to a DynamoDB table.
+      Policies: 
+        - AmazonAPIGatewayInvokeFullAccess
+        - AmazonAPIGatewayAdministrator      
+        - AmazonDynamoDBFullAccess
+      Environment:
+        Variables:
+          # Make table name accessible as environment variable from function code during execution
+          USERTABLE: !Ref UserDBTable
+      Events:
+        ProxyApiRoot:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGatewayApi
+            Path: /user
+            Method: POST
+            Auth:
+              Authorizer: CognitoAuthorizer
+  GetMessageFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: src/GetMessage/getmess.handler
+      Runtime: nodejs12.x
+      MemorySize: 128
+      Timeout: 100
+      Description: A simple example includes a HTTP get method to post user via cognito to a DynamoDB table.
+      Policies: 
+        - AmazonAPIGatewayInvokeFullAccess
+        - AmazonAPIGatewayAdministrator      
+        - AmazonDynamoDBFullAccess
+      Events:
+        ProxyApiRoot:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGatewayApi
+            Path: /chat
+            Method: GET
+            Auth:
+              Authorizer: CognitoAuthorizer
+  RecieveTextFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: src/RecieveText/recieve-text.handler
+      Runtime: nodejs12.x
+      MemorySize: 128
+      Timeout: 30
+      Description: recieve text from queue.
+      Policies:
+        # Give Create/Read/Update/Delete Permissions to the SampleTable
+        - AmazonSQSFullAccess         
+        - AmazonAPIGatewayInvokeFullAccess
+        - AmazonAPIGatewayAdministrator
+        - AmazonDynamoDBFullAccess
+      Events:
+        MySQSEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt InboundEventsQueue.Arn
+            BatchSize: 10
+  # This is a Lambda function config associated with the source code: get-all-items.js
+  getAllItemsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: src/GetAllItems/hexalGetItems.handler
+      Runtime: nodejs12.x
+      MemorySize: 128
+      Timeout: 100
+      Description: A simple example includes a HTTP get method to get all items from a DynamoDB table.
+      Policies:
+        # Give Create/Read/Update/Delete Permissions to the SampleTable
+        - DynamoDBCrudPolicy:
+            TableName: 'Products'
+      Environment:
+        Variables:
+          # Make table name accessible as environment variable from function code during execution
+          SAMPLE_TABLE: 'Products'
+      Events:
+        ProxyApiRoot:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGatewayApi
+            Path: /products
+            Method: GET
+            Auth:
+              Authorizer: CognitoAuthorizer
+  # Each Lambda function is defined by properties:
+  # https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#awsserverlessfunction
+
+  # This is a Lambda function config associated with the source code: get-by-id.js
+  getByIdFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: src/getById/hexalGetItembyId.handler
+      Runtime: nodejs12.x
+      MemorySize: 128
+      Timeout: 100
+      Description: A simple example includes a HTTP get method to get one item by id from a DynamoDB table.
+      Policies:
+        # Give Create/Read/Update/Delete Permissions to the SampleTable
+        - DynamoDBCrudPolicy:
+            TableName: 'Products'
+      Environment:
+        Variables:
+          # Make table name accessible as environment variable from function code during execution
+          SAMPLE_TABLE: 'Products'
+      Events:
+        ProxyApiRoot:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGatewayApi
+            Path: /products/{id}
+            Method: GET
+            Auth:
+              Authorizer: CognitoAuthorizer
+  # Each Lambda function is defined by properties:
+  # https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#awsserverlessfunction
+
+  # This is a Lambda function config associated with the source code: put-item.js
+  putItemFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: src/PutItem/hexalPut.handler
+      Runtime: nodejs12.x
+      MemorySize: 128
+      Timeout: 100
+      Description: A simple example includes a HTTP post method to add one item to a DynamoDB table.
+      Policies:
+        # Give Create/Read/Update/Delete Permissions to the SampleTable
+        - DynamoDBCrudPolicy:
+            TableName: 'Products'
+      Environment:
+        Variables:
+          # Make table name accessible as environment variable from function code during execution
+          SAMPLE_TABLE: 'Products'
+      Events:
+        ProxyApiRoot:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGatewayApi
+            Path: /products
+            Method: POST
+            Auth:
+              Authorizer: CognitoAuthorizer
+  
+  updateItemFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: src/UpdateItem/hexalUpdateItem.handler
+      Runtime: nodejs12.x
+      MemorySize: 128
+      Timeout: 100
+      Description: A simple example includes a HTTP post method to add one item to a DynamoDB table.
+      Policies:
+        # Give Create/Read/Update/Delete Permissions to the SampleTable
+        - DynamoDBCrudPolicy:
+            TableName: 'Products'
+      Environment:
+        Variables:
+          # Make table name accessible as environment variable from function code during execution
+          SAMPLE_TABLE: 'Products'
+      Events:
+        ProxyApiRoot:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGatewayApi
+            Path: /products
+            Method: PUT
+            Auth:
+              Authorizer: CognitoAuthorizer  
+  # Simple syntax to create a DynamoDB table with a single attribute primary key, more in
+  # https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#awsserverlesssimpletable
+  deleteItemFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: src/deleteItem/hexalDelete.handler
+      Runtime: nodejs12.x
+      MemorySize: 128
+      Timeout: 100
+      Description: A simple example includes a HTTP post method to add one item to a DynamoDB table.
+      Policies:
+        # Give Create/Read/Update/Delete Permissions to the SampleTable
+        - DynamoDBCrudPolicy:
+            TableName: 'Products'
+      Environment:
+        Variables:
+          # Make table name accessible as environment variable from function code during execution
+          SAMPLE_TABLE: 'Products'
+      Events:
+        ProxyApiRoot:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGatewayApi
+            Path: /products/{id}
+            Method: DELETE
+            Auth:
+              Authorizer: CognitoAuthorizer  
+  sendtextFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: src/SendText/send-text.handler
+      Runtime: nodejs12.x
+      MemorySize: 128
+      Timeout: 100
+      Description: A simple example includes a HTTP post method to add one item to a DynamoDB table.
+      Policies:
+        # Give Create/Read/Update/Delete Permissions to the SampleTable
+        - AmazonSQSFullAccess 
+        - AmazonDynamoDBFullAccess        
+        - AmazonAPIGatewayInvokeFullAccess
+        - AmazonAPIGatewayAdministrator  
+      Environment:
+        Variables:
+          # Make table name accessible as environment variable from function code during execution
+          QUEUE_URL: !Ref InboundEventsQueue
+      Events:
+        ProxyApiRoot:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGatewayApi
+            Path: /chat
+            Method: POST
+            Auth:
+              Authorizer: CognitoAuthorizer
+  
+  # DynamoDB table to store item: {id: &lt;ID&gt;, name: &lt;NAME&gt;}
+  InboundEventsQueue:
+    Type: AWS::SQS::Queue
+  SampleTable:
+    Name : 'Products'
+    Type: AWS::Serverless::SimpleTable
+    Properties:
+      PrimaryKey:
+        Name: id
+        Type: String
+      ProvisionedThroughput:
+        ReadCapacityUnits: 2
+        WriteCapacityUnits: 2
+
+Outputs:
+  WebEndpoint:
+    Description: "API Gateway endpoint URL for Prod stage"
+    Value: !Sub "https://${ApiGatewayApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/"
+  WebSocketEndpoint:
+    Description: "Websocket API endpoint URL for Prod stage"
+    Value: !Sub "wss://${APIWebSocket}.execute-api.${AWS::Region}.amazonaws.com/Prod/"
